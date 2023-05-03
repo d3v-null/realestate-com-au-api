@@ -8,6 +8,8 @@ from urllib.parse import urlencode
 import json
 import re
 from fajita import Fajita
+import requests
+from realestate_com_au.objects.property import FullAddress
 
 import realestate_com_au.settings as settings
 from realestate_com_au.graphql import searchBuy, searchRent, searchSold
@@ -20,7 +22,7 @@ common_user_agents = [
     'Mozilla/4.0 (compatible; MSIE 6.0; Windows NT 5.1; FSL 7.0.6.01001)',
     'Mozilla/5.0 (iPhone; CPU iPhone OS 10_3_1 like Mac OS X) AppleWebKit/603.1.30 (KHTML, like Gecko) Version/10.0 Mobile/14E304 Safari/602.1',
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/51.0.2704.79 Safari/537.36 Edge/14.14393'
-    ]
+]
 
 
 class RealestateComAu(Fajita):
@@ -28,23 +30,33 @@ class RealestateComAu(Fajita):
     Class for accessing realestate.com.au API.
     """
 
-    API_BASE_URL = "https://lexa.realestate.com.au/graphql"
+    LEXA_BASE_URL = "https://lexa.realestate.com.au/graphql"
+    PEXA_BASE_URL = "https://pexa.realestate.com.au/graphql"
+    SUGGEST_BASE_URL = "https://suggest.realestate.com.au"
     REQUEST_HEADERS = {
         "content-type": "application/json",
         "origin": "https://www.realestate.com.au",
         "sec-fetch-mode": "cors",
         "sec-fetch-site": "same-site",
         "user-agent": random.choice(common_user_agents),
+        # "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Gecko/20100101 Firefox/109.0",
+        # "x-kpsdk-ct": "0JDUugFJ56FHjXoow751EMNFGAolRvx9rdusapolQIsz208PdwJpI9W4EvYKPPF246ctCAsCfyhEQygAmDyFyEbWp0n2eUK6FETJdNwIpAYb1bszkd7KNH839U0C9g2GtMeSZz8yzCaHojt5RbcNy1sWoKLjCBs9wQ6i5WCvU7rwA3gw5YmpMoQRUTha",
+        # "x-kpsdk-cd": "{\"workTime\":1672042526930,\"id\":\"7e19ad81cba6c56c21c0392e11faf0ef\",\"answers\":[24,8],\"duration\":9,\"d\":53,\"st\":1672042322447,\"rst\":1672042322500}",
     }
     _MAX_SEARCH_PAGE_SIZE = 100  # TODO untested
     _DEFAULT_SEARCH_PAGE_SIZE = 25
 
     def __init__(
-        self, proxies={}, debug=False,
+        self, proxies={}, debug=False, api="lexa"
     ):
+        base_url = {
+            "lexa": self.LEXA_BASE_URL,
+            "pexa": self.PEXA_BASE_URL,
+            "suggest": self.SUGGEST_BASE_URL
+        }[api]
         Fajita.__init__(
             self,
-            base_url=self.API_BASE_URL,
+            base_url=base_url,
             headers=self.REQUEST_HEADERS,
             proxies=proxies,
             debug=debug,
@@ -52,6 +64,15 @@ class RealestateComAu(Fajita):
         )
         logging.basicConfig(level=logging.DEBUG if debug else logging.INFO)
         self.logger = logger
+
+    def suggestions(self, address):
+        if type(address) == FullAddress:
+            address = ' '.join(map(str, iter(address)))
+        q = requests.utils.quote(re.sub(r'[\s,/]+', ' ', address), safe=' ')
+        q = re.sub(r' ', '+', q)
+        uri = f"/consumer-suggest/suggestions?max=7&type=address&src=property-value-page&query={q}"
+        page = self._get(uri, base_url=self.SUGGEST_BASE_URL)
+        return page.json()['_embedded']['suggestions']
 
     def search(
         self,
@@ -61,14 +82,15 @@ class RealestateComAu(Fajita):
         locations=[],
         surrounding_suburbs=True,
         exclude_no_sale_price=False,
-        furnished=False,
-        pets_allowed=False,
+        furnished=None,
+        pets_allowed=None,
         ex_under_contract=False,
         min_price=0,
         max_price=-1,
         min_bedrooms=0,
         max_bedrooms=-1,
-        property_types=[],  # "house", "unit apartment", "townhouse", "villa", "land", "acreage", "retire", "unitblock",
+        # "house", "unit apartment", "townhouse", "villa", "land", "acreage", "retire", "unitblock",
+        property_types=[],
         min_bathrooms=0,
         min_carspaces=0,
         min_land_size=0,
@@ -90,10 +112,12 @@ class RealestateComAu(Fajita):
                     "surroundingSuburbs": surrounding_suburbs,
                     "excludeNoSalePrice": exclude_no_sale_price,
                     "ex-under-contract": ex_under_contract,
-                    "furnished": furnished,
-                    "petsAllowed": pets_allowed,
                 },
             }
+            if furnished is not None:
+                query_variables["filters"]["furnished"] = furnished
+            if pets_allowed is not None:
+                query_variables["filters"]["petsAllowed"] = pets_allowed
             if (max_price is not None and max_price > -1) or (
                 max_price is not None and min_price > 0
             ):
@@ -115,11 +139,13 @@ class RealestateComAu(Fajita):
             if property_types:
                 query_variables["filters"]["propertyTypes"] = property_types
             if min_bathrooms is not None and min_bathrooms > 0:
-                query_variables["filters"]["minimumBathroom"] = str(min_bathrooms)
+                query_variables["filters"]["minimumBathroom"] = str(
+                    min_bathrooms)
             if min_carspaces is not None and min_carspaces > 0:
                 query_variables["filters"]["minimumCars"] = str(min_carspaces)
             if min_land_size is not None and min_land_size > 0:
-                query_variables["filters"]["landSize"] = {"minimum": str(min_land_size)}
+                query_variables["filters"]["landSize"] = {
+                    "minimum": str(min_land_size)}
             if construction_status:
                 query_variables["filters"]["constructionStatus"] = construction_status
             if keywords:
@@ -154,7 +180,8 @@ class RealestateComAu(Fajita):
         def parse_items(res):
             data = res.json()
             results = (
-                data.get("data", {}).get(f"{channel}Search", {}).get("results", {})
+                data.get("data", {}).get(
+                    f"{channel}Search", {}).get("results", {})
             )
 
             exact_listings = (results.get("exact", {}) or {}).get("items", [])
@@ -174,12 +201,13 @@ class RealestateComAu(Fajita):
                     listing
                     for listing in listings
                     if not re.search(pattern, str(listing.description))
-                ]          
+                ]
 
             return listings
 
         def get_current_page(**kwargs):
-            current_query_variables = json.loads(kwargs["json"]["variables"]["query"])
+            current_query_variables = json.loads(
+                kwargs["json"]["variables"]["query"])
             return current_query_variables["page"]
 
         def next_page(**kwargs):
@@ -196,13 +224,14 @@ class RealestateComAu(Fajita):
             if limit > -1 and items_count >= limit:
                 return True
 
-            #Sold Listings Limit (Sold listings accumulate indefinetely. Enables data from X most recent sold listings only)
+            # Sold Listings Limit (Sold listings accumulate indefinetely. Enables data from X most recent sold listings only)
             if channel == 'sold' and sold_limit > -1 and items_count >= sold_limit:
                 return True
 
             data = res.json()
             results = (
-                data.get("data", {}).get(f"{channel}Search", {}).get("results", {})
+                data.get("data", {}).get(
+                    f"{channel}Search", {}).get("results", {})
             )
 
             pagination = results.get("pagination")

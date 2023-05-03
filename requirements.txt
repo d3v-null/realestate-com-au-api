@@ -1,0 +1,16 @@
+tabulate
+requests
+bs4
+pandas
+matplotlib
+numpy
+scipy
+sqlalchemy
+statsmodels
+pyautogui
+pywinctl
+websockets
+asyncio
+more_itertools
+mysqlclient
+fajita
