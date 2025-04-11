@@ -1,4 +1,5 @@
 #!/bin/bash
+[ -f .env ] && source .env
 for location in "Bentley, WA 6102" \
         "Burswood, WA 6100" \
         "Carlisle, WA 6101" \
